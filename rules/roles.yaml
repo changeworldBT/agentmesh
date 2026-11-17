@@ -1,0 +1,54 @@
+# /opt/agentmesh/rules/roles.yaml —— 角色枚举与 sys-arch 组件表一致
+# rules-config §8.2 为唯一权威（结构 = §3.1 schema，dict 版；六角色即 §3.2 清单；
+# 含 definition 与 max_iterations；context_budget_tokens 与 skills-config §2.2 示例逐值一致）。
+roles:
+  planner:
+    definition: "自然语言目标→任务树+分组+自包含 brief+风险分级标记；拆解后强制检索错误账本，把命中的生效预防规则注入各 brief"
+    tools: [memory-read, error-report]
+    credential_groups: []
+    context_budget_tokens: 60000
+    max_iterations: 10
+    task_complexity_map:
+      research: 15
+      code: 10
+      write: 5
+    default_iterations: 5
+    llm_overrides:
+      budget_usd_per_task: 1.5
+  worker:
+    definition: "按 brief+知识库+预防规则的独立上下文执行单任务，工具经 MCP 调用；启动时按 brief 二次检索错误账本注入系统提示"
+    tools: [memory-read, error-report, credential-request, approval-submit]
+    credential_groups: [accounts]
+    context_budget_tokens: 100000
+    max_iterations: 5
+    task_complexity_map:
+      research: 15
+      code: 10
+      summarize: 5
+    default_iterations: 5
+    llm_overrides:
+      budget_usd_per_task: 1.0
+  reviewer:
+    definition: "并行结果不自动合并，交叉验证一致性、标记矛盾结论、广播修正指令；质量缺陷登记错误账本、触发规则沉淀检查"
+    tools: [memory-read, error-report, rework-request]
+    credential_groups: []
+    context_budget_tokens: 60000
+    max_iterations: 10
+  orchestrator:
+    definition: "任务状态机驱动、组内并行调度（全局并发≤4 限流）、超时/重试、定点返工指令下发"
+    tools: [error-report, rework-request]
+    credential_groups: []
+    context_budget_tokens: 30000
+    max_iterations: 10
+  approval_gate:
+    definition: "命中审批门的动作：渲染可编辑草稿表单，路由批准/采用编辑版/重生成三按钮（sys-arch §5.2）"
+    tools: [approval-submit, credential-request, error-report]
+    credential_groups: []
+    context_budget_tokens: 20000
+    max_iterations: 5
+  credential_manager:
+    definition: "credential-request 技能的程序侧授权角色：解密 credentials.enc、短寿命注入单次工具调用、写 credential_audit"
+    tools: [credential-request]
+    credential_groups: [api_keys, accounts, vps_inventory]
+    context_budget_tokens: 10000
+    max_iterations: 3

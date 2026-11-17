@@ -1,0 +1,78 @@
+# /opt/agentmesh/rules/collab.yaml —— rules-config §8.3 完整示例实例（逐字提取）
+meta:
+  version: v2
+  updated: 2026-11-16
+
+brief_spec:
+  mandatory_fields:
+    - task_id
+    - task_type
+    - objective
+    - self_contained_context
+    - acceptance_criteria
+    - allowed_tools
+    - risk_tier_hint
+    - budget_usd
+    - max_iterations
+    - deliverable_path
+  optional_fields:
+    - prevention_rules
+    - memory_refs
+  self_contained_rule: "Worker 不共享 Planner 主对话；brief 必须携带完成任务的全部上下文，上游依赖产出的值拷贝进 brief，Worker 禁止反问 Planner"
+
+acceptance_template:
+  types:
+    fact:
+      pattern: "断言 + 出处（URL/文件路径/表名）"
+      check: "出处可访问且内容支持断言"
+    numeric:
+      pattern: "指标名 = 数值 单位（容差 ±x）"
+      check: "复算或复测落在容差内"
+    artifact:
+      pattern: "文件 <相对路径> 存在且 <格式判据>"
+      check: "文件存在且判据通过（如 JSON 可解析、bash -n 通过）"
+    behavior:
+      pattern: "执行 <命令/操作> 后 <期望观察>"
+      check: "按步骤复现得到期望观察"
+  rules:
+    - "每条标准独立可判定，不依赖主观判断"
+    - "禁止'大致/尽量'修饰验收结论"
+    - "判定结果只取 pass / fail / blocked"
+
+contradiction_flow:
+  steps:
+    - id: detect
+      actor: reviewer
+      action: "交叉验证比对各 Worker 产出，标记矛盾结论对"
+    - id: classify
+      actor: reviewer
+      action: "分类：source_conflict|staleness|computation_error|scope_mismatch"
+    - id: register
+      actor: reviewer
+      action: "矛盾登记 error_ledger（error_type=contradiction）；同签名滑窗≥2次触发规则沉淀检查"
+    - id: adjudicate
+      actor: orchestrator
+      action: "可复核解决的→定点返工；无法自证的→广播修正协议征询复核"
+    - id: converge
+      actor: reviewer
+      action: "复验收敛；两轮仍矛盾→保留分歧标注 blocked 上报用户，禁止拍板定稿"
+  hard_rules:
+    - "并行结果不自动合并：进最终交付物前必须过 Reviewer 交叉验证"
+    - "矛盾不得静默丢弃：每条矛盾必须有 error_ledger 记录"
+
+broadcast_protocol:
+  trigger: "结论被推翻且被 ≥1 个其他任务引用"
+  steps:
+    - "Reviewer 生成修正指令：错误结论原文、正确结论、受影响 task_id 列表"
+    - "Orchestrator 广播给所有受影响任务的 Worker（含已完成任务，标记 rework）"
+    - "受影响 Worker 重算受影响部分并回报 diff；无需重算的回报 no-op 确认"
+    - "Reviewer 复验全部回报后关闭修正事件"
+  constraints:
+    - "只重算受影响部分（定点，非整体返工）"
+    - "广播消息自包含：携带错误原文与正确结论"
+
+rework_syntax:
+  grammar: "rework <task_id> items=<item-range> reason=<error_ref> deadline=<ISO8601>"
+  applicability: "仅当目标任务无未完成上游依赖，且定点项数 ≥10 时允许；否则整任务重派"
+  enforcement: "Orchestrator 下发前校验；不过则登记 error_ledger（error_type=rework_guard_violation）并转整任务重派"
+  example: "rework g3-2 items=20-30 reason=42 deadline=2026-11-16T18:00:00+08:00"

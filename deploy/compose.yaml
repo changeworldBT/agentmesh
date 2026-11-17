@@ -1,0 +1,68 @@
+# impl/deploy/compose.yaml —— AgentMesh 单容器编排（deployment-ops §2.1 的部署落地版）
+# 安装位：install.sh 步骤 3 把本文件落到安装根 /opt/agentmesh/compose.yaml；
+# env_file: .env 即安装根 /opt/agentmesh/.env（install.sh 步骤 4 写入并 chmod 600）。
+# 挂载纪律（本 ask）：状态/日志/工作目录全部落宿主 /data/agentmesh/*（/data=20G 数据盘，
+# real-vps-facts.md 约束结论 1）；规则/技能/静态页落安装根、容器只读（运行期不可篡改）。
+
+services:
+  agentmesh-core:
+    # 构建产物标签；有 build: 键时 compose up 不去 registry 拉取，一律本地构建
+    image: agentmesh-core:latest
+    build:
+      context: .                # = /opt/agentmesh（安装根，含 app/ 与 scripts/）
+      dockerfile: Dockerfile    # = /opt/agentmesh/Dockerfile（install.sh 自 deploy/Dockerfile 落盘）
+    container_name: agentmesh-core        # 固定容器名：docker exec / 探针 / 运维脚本按名寻址
+    entrypoint: ["/opt/agentmesh/scripts/docker-entrypoint.sh"]   # 启动前置自检（impl/scripts/，随镜像 COPY）
+    restart: unless-stopped               # 崩溃自动重启；人工 stop 后不自启（维护窗口可控）
+    user: "10001:10001"                   # 非 root 运行；与宿主 agentmesh 用户 UID 对齐（install.sh 步骤 2 建）
+    mem_limit: 2g                         # 内存硬限 2G（deployment-ops §2.4 资源红线对照）
+    memswap_limit: 3g                     # 内存+swap 合计 3G：容器最多额外吃 1G swap（宿主 4G swap，swappiness=10）
+    ports:
+      - "127.0.0.1:8787:8787"             # 对外唯一端口只绑回环；公网暴露经宿主反代（不在本件范围）
+    env_file:
+      - .env                              # /opt/agentmesh/.env：LLM_*/AGENTMESH_PORT/*_FILE 指针/BUDGET/TZ（600，无明文令牌）
+    environment:
+      # 内核路径面（impl/app/main.py:52-73 的 env 解析；安装根=AGENTMESH_ROOT 默认值）
+      AGENTMESH_ROOT: /opt/agentmesh
+      AGENTMESH_DATA_DIR: /opt/agentmesh/data        # SQLite（WAL）+ kb/transcripts 子目录 → 宿主 /data/agentmesh/db
+      AGENTMESH_RULES_DIR: /opt/agentmesh/rules
+      AGENTMESH_SKILLS_DIR: /opt/agentmesh/skills
+      AGENTMESH_WEB_DIR: /opt/agentmesh/web
+      # 工作区根：与内核默认值一致（impl/app/engine/executor.py:53 DEFAULT_WORKSPACE_ROOT），
+      # 显式写出防漂移；宿主与容器同路径（/data/agentmesh/workspaces 恒等挂载）
+      AGENTMESH_WORKSPACE_ROOT: /data/agentmesh/workspaces
+      # 凭证通道（CRED §3 路径 A' / §10.2）：age 密文 + compose file 型 secret 的容器内落点；
+      # 内核启动经 app/engine/credentials.py 解密，明文只在进程内存窗口（CRED §5.1）
+      AGENTMESH_CREDENTIALS_FILE: /opt/agentmesh/credentials/credentials.enc
+      AGENTMESH_AGE_KEY_FILE: /run/secrets/age_key
+    secrets:
+      - age_key                          # 宿主 /etc/agentmesh/age-key.txt → tmpfs 只读 /run/secrets/age_key
+    volumes:
+      # —— 状态/日志/工作目录/备份：全部落宿主 /data/agentmesh/*（本 ask 挂载纪律）——
+      - /data/agentmesh/db:/opt/agentmesh/data          # SQLite 库（重状态落数据盘）
+      - /data/agentmesh/logs:/opt/agentmesh/logs        # 文件态日志/运维导出位（运行态 stdout 走下方 local 驱动双限）
+      - /data/agentmesh/workspaces:/data/agentmesh/workspaces   # 任务工作区（executor.py:53 默认根，恒等挂载）
+      - /data/agentmesh/backups:/data/agentmesh/backups         # 备份落点：容器内 VACUUM INTO 可直写（deployment-ops §7.3 形态）
+      # —— 规则/技能/静态页：安装根内容容器只读（加载权威源不被运行时篡改）——
+      - /opt/agentmesh/rules:/opt/agentmesh/rules:ro
+      - /opt/agentmesh/skills:/opt/agentmesh/skills:ro
+      - /opt/agentmesh/web:/opt/agentmesh/web:ro
+      # —— 凭证密文：只读挂载（age 密文，容器无写路径；credentials-spec §2.1/§2.3）——
+      - /opt/agentmesh/credentials:/opt/agentmesh/credentials:ro
+    logging:
+      driver: local                       # 双限之一（daemon.json 全局默认同值，此处显式声明防漂移）
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
+    healthcheck:
+      # 内核健康端点 /healthz（impl/app/api/server.py:333，无鉴权）；探针用镜像内自带 python
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8787/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s                   # 启动窗口宽限：preflight 装载 rules/skills 建库期间不误判
+
+secrets:
+  age_key:
+    file: /etc/agentmesh/age-key.txt     # 宿主 0600 root:root；tmpfs 只读、不入镜像不入卷（CRED §3.1 路径 A'）

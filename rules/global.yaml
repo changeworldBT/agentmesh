@@ -1,0 +1,79 @@
+# /opt/agentmesh/rules/global.yaml —— rules-config §8.1 完整示例实例（逐字提取）
+meta:
+  version: v3
+  updated: 2026-11-16
+  checksum_note: "硬底线：max_global_concurrency<=4；irreversible tier 不可下调"
+
+locale:
+  language: zh-CN
+  timezone: Asia/Shanghai
+  date_format: "%Y-%m-%d"
+
+llm:
+  provider: unified-api-gateway
+  model: glm-default            # 统一 API 网关的默认模型路由名，按实际网关配置填写
+  budget_usd_per_task: 2.0
+  budget_usd_monthly: 60.0
+  max_input_tokens_per_call: 32000
+  max_output_tokens_per_call: 8192
+
+concurrency:
+  max_global_concurrency: 4    # 硬底线：≤4 为资源边界内建常量，加载器拒绝 >4 的值
+  max_group_concurrency: 2
+  task_queue_limit: 20
+
+approval_risk_tiers:
+  tiers:
+    - tier: irreversible
+      definition: "出错后无法撤回或撤回代价极高"
+      actions:
+        - "email.send:*"
+        - "payment.pay:*"
+        - "message.send:*"
+        - "credential.rotate:*"
+        - "data.delete_permanent:*"
+        - "dns.update:*"
+      gate: "block_render_draft_multi_button"
+      gate_options: ["approve", "use_edited", "regenerate"]
+      escalate_after_occurrences: 0    # irreversible 恒为必审批，无升级概念，0=不适用
+      default_wait_seconds: 86400    # = sys-arch APPROVAL_DEFAULT_WAIT 默认值 24h；运行时以同容器 env 覆盖为准（§2.1）
+      on_timeout: cancel
+      hard_floor: true
+    - tier: reversible_costly
+      definition: "可撤回但需人工善后"
+      actions:
+        - "file.write_outside_workspace:*"
+        - "vps.config_change:*"
+        - "db.migration:*"
+        - "data.delete_bulk:*"
+        - "content.draft_publishable:*"
+      gate: "audit_pass_then_escalate"    # 默认自主推进落审计；同签名错误 >=2 次升级为拦截审批（escalate_after_occurrences）
+      gate_options: ["approve", "use_edited", "regenerate"]   # 升级为审批后可用的路由按钮
+      escalate_after_occurrences: 2
+      default_wait_seconds: 86400    # 与 irreversible 同一等待基准；运行时以同容器 env 覆盖为准（§2.1）
+      on_timeout: pause
+      hard_floor: false
+    - tier: reversible
+      definition: "一键可撤回"
+      actions:
+        - "file.write_in_workspace:*"
+        - "http.get:*"
+        - "db.read:*"
+        - "memory.write:*"
+        - "ledger.write:*"
+      gate: "pass_through_audit_log"
+      default_wait_seconds: 0
+      on_timeout: none
+      hard_floor: false
+  unclassified_default_tier: reversible_costly
+
+# 预防规则自动生效白名单（memory-design §3.2/§5.1 消费）：
+# risk_level='low' 且 match_keywords 命中任一关键词 → 免人工审核直接 active
+prevention_auto_activate_whitelist:
+  - "timeout"
+  - "retry-limit"
+  - "disk-check"
+  - "dry-run-first"
+
+logging:
+  rule_audit_enabled: true

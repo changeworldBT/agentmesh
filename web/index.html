@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentMesh 任务面板</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- 鉴权门（无令牌时全屏；localStorage 只存令牌/已阅失败项/UI 偏好三类，FRU-01 铁律 4） -->
+  <div id="token-gate" class="overlay hidden">
+    <div class="overlay-card">
+      <h1>AgentMesh 任务面板</h1>
+      <p class="muted">输入 API 令牌（<code>credentials.enc → api_keys.agentmesh_api_token</code>，经
+        <code>AGENTMESH_API_TOKEN</code> 注入内核）。令牌仅存本浏览器 localStorage，无任何读取端点（ICON §1.2）。</p>
+      <input id="token-input" type="password" placeholder="Bearer 令牌" autocomplete="off">
+      <div class="row">
+        <button id="token-save" class="btn primary">进入面板</button>
+        <span id="token-error" class="error-text"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 内核未就绪全屏态（G-06：503 KERNEL_NOT_READY → 全屏 + healthz 轮询） -->
+  <div id="kernel-down" class="overlay hidden">
+    <div class="overlay-card">
+      <h1>内核未就绪</h1>
+      <p class="muted">API 返回 503（启动中 / SQLite 不可用）。正在轮询 /healthz，恢复后自动返回。</p>
+      <div class="row"><span id="kernel-down-status" class="muted">检测中…</span>
+        <button id="kernel-retry" class="btn">立即重试</button></div>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="topbar">
+      <div class="brand">
+        <strong>AGENTMESH 任务面板</strong>
+        <button id="btn-new-task" class="btn primary sm">＋ 提交新任务</button>
+      </div>
+      <div id="budget-bar" class="budget" title="">预算 加载中…</div>
+      <div class="lights">
+        <span id="sse-light" class="light" title="事件流状态">● 事件流</span>
+        <span id="health-light" class="light" title="healthz">● healthz</span>
+        <button id="btn-logout" class="btn sm ghost" title="清除本机令牌">退出</button>
+      </div>
+    </header>
+
+    <div id="degrade-banner" class="banner hidden"></div>
+
+    <nav class="tabs">
+      <a href="#/" data-tab="v1">① 总览看板</a>
+      <a href="#/triggers" data-tab="v3">③ 定时与长期任务</a>
+      <a href="#/errors" data-tab="v4">④ 错误账本</a>
+      <span class="tabs-note" id="tz-note">时间为浏览器时区展示</span>
+    </nav>
+
+    <main id="view" class="view"><div class="loading">加载中…</div></main>
+
+    <footer class="statusbar">
+      <span id="runtime-strip">运行时：加载中…</span>
+      <span id="data-asof" class="muted"></span>
+    </footer>
+  </div>
+
+  <!-- 提交任务抽屉（G-01）：只有 goal + notes，零画布字段（铁律 1） -->
+  <div id="drawer-new-task" class="drawer hidden">
+    <div class="drawer-panel">
+      <div class="drawer-head"><strong>提交新任务（A1）</strong><button class="btn sm" data-close>关闭</button></div>
+      <label>目标 goal（自然语言，1–8000 字符；规划器独占拆解权，无任务树/节点/连线字段）</label>
+      <textarea id="nt-goal" rows="6" maxlength="8000" placeholder="例：调研 20 个 SaaS 定价页并整理成对比表，存到工作区 pricing/"></textarea>
+      <label>补充说明 notes（≤2000；进入规划上下文，<em>永不进入子任务 brief</em>——上下文隔离，ARCH §9.3 不变量 1）</label>
+      <textarea id="nt-notes" rows="3" maxlength="2000"></textarea>
+      <div class="muted small">client_ref 与 Idempotency-Key 由面板自动生成（24h 幂等窗口，ICON §1.3）。</div>
+      <div class="row"><button id="nt-submit" class="btn primary">提交（202 → 详情）</button>
+        <span id="nt-error" class="error-text"></span></div>
+    </div>
+  </div>
+
+  <!-- 全局审批抽屉（G-05，深链 #/approval/{approval_id}） -->
+  <div id="drawer-approval" class="drawer hidden">
+    <div class="drawer-panel wide">
+      <div class="drawer-head"><strong>审批裁决（B3）</strong><button class="btn sm" data-close>关闭</button></div>
+      <div id="approval-body" class="drawer-body"><div class="loading">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- secret_once 一次性模态（TR-05）：关闭即从内存清除，绝不持久化；confirm/prompt 复用同一模态根 -->
+  <div id="modal-root" class="modal-root hidden"></div>
+  <div id="toast-root" class="toast-root"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

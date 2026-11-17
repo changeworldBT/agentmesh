@@ -1,0 +1,48 @@
+# /opt/agentmesh/rules/lessons.yaml —— rules-config §8.4 完整示例实例（逐字提取）
+# 本文件是 prevention_rules 表中 active 规则的导出发布形态（memory-design §3.3
+# 单一权威源裁定）：由规则沉淀流程自动重写，人工不直接编辑本文件——
+# 审核位/废止操作在表上进行后由下一次导出反映；candidate/retired 不出现在 yaml。
+meta:
+  version: v5
+  updated: 2026-11-16
+
+rules:
+  - id: 12
+    rule_id: rule-a3f81c2e9b04d7f2-01
+    trigger: "Worker 用非 IANA 时区缩写生成 cron 表达式，触发器在错误时区触发"
+    signature: "TriggerTimezoneError+triggers+cron_field=non-IANA"
+    scope:
+      task_types: ["ops", "automation"]
+      tools: ["cron.create"]
+      roles: ["worker"]
+    rule_text: "生成 cron 定时任务时，时区字段必须写 IANA 时区名（如 Asia/Shanghai），禁止写 CST/EST 等歧义缩写；提交前用 trigger 的 test run 验证首次触发时刻。"
+    source_error_ids:
+      - 31
+      - 58
+    occurrences: 2
+    review:
+      required: true
+      reviewed_by: feng
+      reviewed_at: "2026-11-14T09:30:00+08:00"
+      verdict: approved
+      note: "与触发器组件的精确时区表述要求一致，批准"
+
+  - id: 13
+    rule_id: rule-9d20b7aa41c85e63-02
+    trigger: "Worker 在 http.get 响应超过上下文预算时整页塞入对话导致截断丢信息"
+    signature: "ContextOverflowError+worker+http.get=large-body"
+    scope:
+      task_types: ["research", "summarize"]
+      tools: ["http.get"]
+      roles: ["worker"]
+    rule_text: "http.get 预期响应超过 8000 token 时，先落盘到工作区文件再按需分段读取，不得把整页响应塞进对话上下文。"
+    source_error_ids:
+      - 44
+      - 71
+    occurrences: 3
+    review:
+      required: false
+      reviewed_by: auto-whitelist
+      reviewed_at: "2026-11-15T20:12:00+08:00"
+      verdict: approved
+      note: "自动生效：risk_level=low 且 match_keywords（http.get 超时上限）命中 prevention_auto_activate_whitelist 的 timeout/retry-limit"

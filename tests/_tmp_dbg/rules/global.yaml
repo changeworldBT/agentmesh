@@ -1,0 +1,6 @@
+meta: {version: v1}
+concurrency: {max_global_concurrency: 4}
+approval_risk_tiers:
+  tiers:
+    - {tier: irreversible, hard_floor: true}
+locale: {timezone: Asia/Shanghai}
