@@ -1,0 +1,8 @@
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://111.91.28.8:3430",
+    "ANTHROPIC_MODEL": "auto/glm-5.3",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "262144"
+  },
+  "apiKeyHelper": "powershell -NoProfile -Command \"(Get-Content -Raw C:/Users/84915/.zcode/cli/config.json | ConvertFrom-Json).provider.'new-provider'.options.apiKey\""
+}
