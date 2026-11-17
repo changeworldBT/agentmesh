@@ -376,6 +376,68 @@ def test_agent_run_dispatches_via_stub_herdr(monkeypatch=None) -> None:
             os.environ["AGENTMESH_HERDR_BIN"] = saved
 
 
+def test_agent_run_agent_pool_allowlist_and_dispatch(monkeypatch=None) -> None:
+    """agent 派发池：AGENTMESH_HERDR_AGENTS 是白名单——池内成员按名派发、缺省取池首、
+    池外名字拒绝（防子任务 LLM 指到任意 pane）。"""
+    import os
+    import stat
+    import tempfile
+    from app.engine.executor import ToolError, tool_agent_run
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="agentmesh_herdr_pool_"))
+    out = tmpdir / "out.txt"
+    if os.name == "nt":
+        script = tmpdir / "herdr.bat"
+        script.write_text(
+            "@echo off\r\n"
+            "if /I \"%2\"==\"prompt\" (echo agent=%3> \"" + str(out).replace("/", "\\") +
+            "\" & echo {\"id\":\"x\",\"result\":{\"type\":\"agent_prompted\"}} & exit /b 0)\r\n"
+            "if /I \"%2\"==\"read\" (echo AGENT OUTPUT TAIL LINE & exit /b 0)\r\n"
+            "if /I \"%2\"==\"get\" (echo {\"result\":{\"agent\":{\"agent_status\":\"idle\"}}} & exit /b 0)\r\n"
+            "exit /b 1\r\n", encoding="ascii")
+    else:
+        script = tmpdir / "herdr"
+        script.write_text(
+            "#!/bin/sh\n"
+            "case \"$2\" in\n"
+            "  prompt) echo \"agent=$3\" > '" + str(out) + "';"
+            " echo '{\"id\":\"x\",\"result\":{\"type\":\"agent_prompted\"}}'; exit 0;;\n"
+            "  read)   echo 'AGENT OUTPUT TAIL LINE'; exit 0;;\n"
+            "  get)    echo '{\"result\":{\"agent\":{\"agent_status\":\"idle\"}}}'; exit 0;;\n"
+            "esac\nexit 1\n", encoding="ascii")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    saved_bin = os.environ.get("AGENTMESH_HERDR_BIN")
+    saved_pool = os.environ.get("AGENTMESH_HERDR_AGENTS")
+    os.environ["AGENTMESH_HERDR_BIN"] = str(script)
+    os.environ["AGENTMESH_HERDR_AGENTS"] = "w1,w2"
+    try:
+        # ① 指定池内成员 → 精确派发给该成员
+        result = tool_agent_run({"task": "做点事", "agent": "w2"}, task_id="task-x")
+        assert result["agent"] == "w2" and result["status"] == "idle"
+        assert "agent=w2" in out.read_text(encoding="utf-8", errors="replace")
+        # ② 缺省 → 池首
+        out.unlink(missing_ok=True)
+        result2 = tool_agent_run({"task": "做点事"}, task_id="task-x")
+        assert result2["agent"] == "w1"
+        # ③ 池外名字 → agent_unknown，错误里带白名单
+        try:
+            tool_agent_run({"task": "做点事", "agent": "intruder"}, task_id="task-x")
+        except ToolError as exc:
+            assert exc.error_type == "agent_unknown"
+            assert "w1,w2" in str(exc) or "w1,w2" in json.dumps(exc.params or {})
+        else:
+            raise AssertionError("out-of-pool agent must raise agent_unknown")
+    finally:
+        if saved_bin is None:
+            os.environ.pop("AGENTMESH_HERDR_BIN", None)
+        else:
+            os.environ["AGENTMESH_HERDR_BIN"] = saved_bin
+        if saved_pool is None:
+            os.environ.pop("AGENTMESH_HERDR_AGENTS", None)
+        else:
+            os.environ["AGENTMESH_HERDR_AGENTS"] = saved_pool
+
+
 def test_agent_run_in_allowlist_and_plan_contract() -> None:
     """agent_run 必须在内核白名单与 STUB 计划模板里（治理通道对 planner 可见）。"""
     from app.engine.executor import TOOL_ALLOWLIST, TOOL_SCHEMAS

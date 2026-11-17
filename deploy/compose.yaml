@@ -36,6 +36,8 @@ services:
       # herdr 二进制与 socket 只读挂载；socket 由宿主用户属主，容器内 agentmesh 用户可读
       AGENTMESH_HERDR_BIN: /usr/local/bin/herdr
       AGENTMESH_HERDR_AGENT: agentmesh-worker
+      # 派发池（executor.py agent_run 的 agent 白名单）：无依赖子任务可点名不同成员并行
+      AGENTMESH_HERDR_AGENTS: agentmesh-worker,agentmesh-worker-2,agentmesh-worker-3
       # herdr CLI 按 $HOME/.config/herdr/herdr.sock 寻址；宿主 agentmesh 用户 HOME=/data/home，
       # socket 挂载点也在 /data/home 下——容器内必须对齐 HOME，否则报 server_not_running
       HOME: /data/home

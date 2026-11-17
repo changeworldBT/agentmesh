@@ -203,6 +203,18 @@ def _herdr_agent_name() -> str:
     return os.environ.get("AGENTMESH_HERDR_AGENT") or DEFAULT_HERDR_AGENT
 
 
+def _herdr_agent_pool() -> tuple[str, ...]:
+    """可派发的常驻 agent 名池：AGENTMESH_HERDR_AGENTS（逗号分隔）> 单值 AGENTMESH_HERDR_AGENT
+    > 默认。池即白名单——agent_run 只允许把活派给池内成员（防止子任务 LLM 指到任意 pane）。"""
+    raw = os.environ.get("AGENTMESH_HERDR_AGENTS")
+    if raw and raw.strip():
+        pool = tuple(dict.fromkeys(
+            name.strip() for name in raw.split(",") if name.strip()))
+        if pool:
+            return pool
+    return (_herdr_agent_name(),)
+
+
 def tool_agent_run(params: dict[str, Any], *, task_id: str,
                    root: str | os.PathLike[str] | None = None) -> dict[str, Any]:
     """把一段自包含任务文本派给 herdr 常驻 agent，阻塞等终态并回读末尾输出。
@@ -210,6 +222,8 @@ def tool_agent_run(params: dict[str, Any], *, task_id: str,
     params:
       - task: 必填，自包含任务文本（自然语言；agent 无主对话上下文）
       - workspace: 可选，相对任务工作区的子目录（agent 的工作落点提示，写进任务文本）
+      - agent: 可选，目标 agent 名（须在 AGENTMESH_HERDR_AGENTS 池内）；缺省取池首。
+        多个无依赖子任务可各指定不同成员并行跑（planner 分组派发，alma 逐个可见）
     返回 {agent,status,exit_hint,output_tail}；不搬运产物文件——产物由 agent 按 brief
     的 deliverable_path 直接写任务工作区（与 file_write 同一硬限制根，内核只回读文本）。
     """
@@ -217,8 +231,13 @@ def tool_agent_run(params: dict[str, Any], *, task_id: str,
     if not text:
         raise ToolError("task_empty", "agent_run requires task", {"task": ""})
     sub = str((params or {}).get("workspace") or "").strip()
+    pool = _herdr_agent_pool()
+    agent_name = str((params or {}).get("agent") or "").strip() or pool[0]
+    if agent_name not in pool:
+        raise ToolError("agent_unknown",
+                        f"agent {agent_name!r} not in dispatch pool",
+                        {"agent": agent_name, "allowed": ",".join(pool)})
     bin_path = _herdr_bin()
-    agent_name = _herdr_agent_name()
     prompt = text
     if sub:
         safe = re.sub(r"[^A-Za-z0-9._/-]", "_", sub).strip("/")
@@ -285,6 +304,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "properties": {
                 "task": {"type": "string", "description": "自包含任务文本（agent 无主对话上下文）"},
                 "workspace": {"type": "string", "description": "任务工作区内子目录，agent 的产物落点"},
+                "agent": {"type": "string",
+                          "description": "目标常驻 agent 名（须在派发池内，缺省取池首）；"
+                                         "多个无依赖子任务指定不同成员可并行"},
             },
             "required": ["task"],
         },
