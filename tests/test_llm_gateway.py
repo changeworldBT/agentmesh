@@ -127,7 +127,7 @@ def test_stub_deterministic_and_kind_aware() -> None:
         assert first.content == second.content  # 确定性：同请求同输出
         plan = json.loads(first.content or "")
         assert plan["groups"][0]["id"] == "g1" and plan["subtasks"][0]["group_id"] == "g1"
-        assert plan["subtasks"][0]["allowed_tools"] == ["http_get", "file_write"]
+        assert plan["subtasks"][0]["allowed_tools"] == ["http_get", "file_write", "agent_run"]
         assert plan["subtasks"][0]["risk_tier_hint"] in ("irreversible", "reversible_costly", "reversible")
         # kind=execute：含非空 summary 的 JSON（executor 终答契约）
         exec_req = LLMRequest(messages=[{"role": "user", "content": "执行"}], kind="execute",

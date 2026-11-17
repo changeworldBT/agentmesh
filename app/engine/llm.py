@@ -314,7 +314,7 @@ def _stub_plan(payload: dict[str, Any]) -> dict[str, Any]:
             "task_type": task_type,
             "self_contained_context": f"主任务目标（必要摘录）: {goal[:200]}",
             "acceptance_criteria": ["结果为 JSON 且含非空 summary 字段"],
-            "allowed_tools": ["http_get", "file_write"],
+            "allowed_tools": ["http_get", "file_write", "agent_run"],
             "risk_tier_hint": "reversible",
             "budget_usd": 0.5,
             "max_iterations": 3,

@@ -56,7 +56,7 @@ def test_planner_stub_happy_path_persists_tree_and_brief() -> None:
                     "acceptance_criteria", "allowed_tools", "risk_tier_hint", "budget_usd",
                     "max_iterations", "deliverable_path"):
             assert key in brief, key
-        assert brief["allowed_tools"] == ["http_get", "file_write"]
+        assert brief["allowed_tools"] == ["http_get", "file_write", "agent_run"]
         assert brief["max_iterations"] == 3 and brief["budget_usd"] == 0.5
         assert brief["on_failure"] == "register_and_stop"
         assert brief["degraded"] is False

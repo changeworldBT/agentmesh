@@ -31,6 +31,14 @@ services:
       # 工作区根：与内核默认值一致（impl/app/engine/executor.py:53 DEFAULT_WORKSPACE_ROOT），
       # 显式写出防漂移；宿主与容器同路径（/data/agentmesh/workspaces 恒等挂载）
       AGENTMESH_WORKSPACE_ROOT: /data/agentmesh/workspaces
+      # 治理执行通道（executor.py tool_agent_run）：容器内经 herdr CLI 派活给宿主 herdr
+      # server 的常驻 agent pane（AGENTMESH_HERDR_AGENT，默认 agentmesh-worker）。
+      # herdr 二进制与 socket 只读挂载；socket 由宿主用户属主，容器内 agentmesh 用户可读
+      AGENTMESH_HERDR_BIN: /usr/local/bin/herdr
+      AGENTMESH_HERDR_AGENT: agentmesh-worker
+      # herdr CLI 按 $HOME/.config/herdr/herdr.sock 寻址；宿主 agentmesh 用户 HOME=/data/home，
+      # socket 挂载点也在 /data/home 下——容器内必须对齐 HOME，否则报 server_not_running
+      HOME: /data/home
       # 凭证通道（CRED §3 路径 A' / §10.2）：age 密文 + compose file 型 secret 的容器内落点；
       # 内核启动经 app/engine/credentials.py 解密，明文只在进程内存窗口（CRED §5.1）
       AGENTMESH_CREDENTIALS_FILE: /opt/agentmesh/credentials/credentials.enc
@@ -49,6 +57,9 @@ services:
       - /opt/agentmesh/web:/opt/agentmesh/web:ro
       # —— 凭证密文：只读挂载（age 密文，容器无写路径；credentials-spec §2.1/§2.3）——
       - /opt/agentmesh/credentials:/opt/agentmesh/credentials:ro
+      # —— 治理执行通道：herdr CLI + socket 只读（agent_run 工具的唯一出壳通道）——
+      - /data/agentmesh/herdr-bin/herdr:/usr/local/bin/herdr:ro
+      - /data/home/.config/herdr/herdr.sock:/data/home/.config/herdr/herdr.sock:ro
     logging:
       driver: local                       # 双限之一（daemon.json 全局默认同值，此处显式声明防漂移）
       options:

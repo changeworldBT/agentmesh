@@ -45,7 +45,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -57,7 +59,7 @@ from app.engine.db import Database, emit_event, json_dumps, utc_now_iso
 from app.engine.llm import LLMGatewayError, LLMRequest, LLMResponse
 from app.engine.state import SubtaskStatus, transition_subtask
 
-TOOL_ALLOWLIST: tuple[str, ...] = ("http_get", "file_write")
+TOOL_ALLOWLIST: tuple[str, ...] = ("http_get", "file_write", "agent_run")
 DEFAULT_WORKSPACE_ROOT = "/data/agentmesh/workspaces"  # 本 ask 指定；real-vps-facts：重状态落 /data
 MAX_HTTP_BYTES = 262144          # http_get 响应字节上限（256KB，防大响应挤占内存）
 DEFAULT_HTTP_TIMEOUT_S = 10.0
@@ -164,6 +166,98 @@ def tool_file_write(params: dict[str, Any], *, task_id: str, root: str | os.Path
     return {"path": str(target), "bytes": len(data)}
 
 
+# ---------------------------------------------------------------------------
+# agent_run：经 herdr CLI 把子任务派给真实 coding agent（治理层⇄执行体对接位）。
+# herdr 预置一个常驻 agent pane（herdr agent start ... --kind claude），内核以
+# `herdr agent prompt <name> <text> --wait` 派活并等终态，再 `herdr agent read` 收尾答。
+# 治理纪律：内核不直接 shell 任意命令——只经 herdr 一条受控通道；产物由 agent 写进
+# 本任务工作区（brief.deliverable_path 落在 <root>/<task_id>/ 之下，file_write 硬限制同源）。
+# ---------------------------------------------------------------------------
+
+DEFAULT_HERDR_BIN = "herdr"
+DEFAULT_HERDR_AGENT = "agentmesh-worker"
+AGENT_RUN_TIMEOUT_S = 600.0          # 真实 agent 跑任务的兜底上限（10 分钟）
+AGENT_RUN_MAX_OUTPUT = 8192          # 回读 tail 上限（防大输出挤占上下文）
+
+
+class HerdrUnavailableError(ToolError):
+    """herdr CLI/agent pane 不可用（治理通道未接线）。"""
+
+    def __init__(self, message: str, params: dict[str, str] | None = None) -> None:
+        super().__init__("herdr_unavailable", message, params)
+
+
+def _herdr_bin() -> str:
+    """herdr 二进制：AGENTMESH_HERDR_BIN 环境变量 > PATH 上的 herdr。"""
+    override = os.environ.get("AGENTMESH_HERDR_BIN")
+    if override and os.path.isfile(override):
+        return override
+    found = shutil.which(DEFAULT_HERDR_BIN)
+    if not found:
+        raise HerdrUnavailableError(
+            "herdr CLI 不在 PATH（治理执行通道未接线）；安装后设 AGENTMESH_HERDR_BIN")
+    return found
+
+
+def _herdr_agent_name() -> str:
+    return os.environ.get("AGENTMESH_HERDR_AGENT") or DEFAULT_HERDR_AGENT
+
+
+def tool_agent_run(params: dict[str, Any], *, task_id: str,
+                   root: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """把一段自包含任务文本派给 herdr 常驻 agent，阻塞等终态并回读末尾输出。
+
+    params:
+      - task: 必填，自包含任务文本（自然语言；agent 无主对话上下文）
+      - workspace: 可选，相对任务工作区的子目录（agent 的工作落点提示，写进任务文本）
+    返回 {agent,status,exit_hint,output_tail}；不搬运产物文件——产物由 agent 按 brief
+    的 deliverable_path 直接写任务工作区（与 file_write 同一硬限制根，内核只回读文本）。
+    """
+    text = str((params or {}).get("task") or "").strip()
+    if not text:
+        raise ToolError("task_empty", "agent_run requires task", {"task": ""})
+    sub = str((params or {}).get("workspace") or "").strip()
+    bin_path = _herdr_bin()
+    agent_name = _herdr_agent_name()
+    prompt = text
+    if sub:
+        safe = re.sub(r"[^A-Za-z0-9._/-]", "_", sub).strip("/")
+        if safe:
+            ws = resolve_in_workspace(root, task_id, safe)
+            ws.mkdir(parents=True, exist_ok=True)
+            prompt = f"{text}\n（产物/工作文件请放在 {ws} 目录内）"
+
+    def _herdr(args: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run([bin_path, *args], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=timeout)
+        except FileNotFoundError as exc:
+            raise HerdrUnavailableError(f"herdr binary vanished: {bin_path}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ToolError("agent_run_timeout",
+                            f"herdr {args[0]} timed out after {timeout:.0f}s",
+                            {"agent": agent_name}) from exc
+
+    # ① 派活并等终态（--wait 阻塞到 agent 回 idle；失败即 ToolError，账本即时登记）
+    prompt_run = _herdr(["agent", "prompt", agent_name, prompt, "--wait"], AGENT_RUN_TIMEOUT_S)
+    if prompt_run.returncode != 0:
+        raise ToolError("agent_prompt_failed",
+                        (prompt_run.stderr or prompt_run.stdout or "").strip()[:400],
+                        {"agent": agent_name, "exit_code": str(prompt_run.returncode)})
+    # ② 回读终端末尾输出（最终答复/报错都在末尾；tail 上限防挤占）
+    read_run = _herdr(["agent", "read", agent_name], 30.0)
+    tail = (read_run.stdout or "").strip()[-AGENT_RUN_MAX_OUTPUT:]
+    state = _herdr(["agent", "get", agent_name], 15.0)
+    status = "idle"
+    try:
+        payload = json.loads(state.stdout or "{}")
+        status = str(((payload.get("result") or {}).get("agent") or {}).get("agent_status") or "idle")
+    except json.JSONDecodeError:
+        pass
+    return {"agent": agent_name, "status": status, "exit_hint": prompt_run.returncode,
+            "output_tail": tail}
+
+
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "http_get",
@@ -181,6 +275,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
             "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "agent_run",
+        "description": "把一段自包含任务派给 herdr 常驻真实 coding agent（可读写文件/跑命令），阻塞等终态并回读输出末尾；产物请让 agent 写入任务工作区",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "自包含任务文本（agent 无主对话上下文）"},
+                "workspace": {"type": "string", "description": "任务工作区内子目录，agent 的产物落点"},
+            },
+            "required": ["task"],
         },
     },
 ]
@@ -256,6 +362,8 @@ class ToolBox:
                 result = tool_http_get(call_params, task_id=self.task_id, headers=headers)
             elif name == "file_write":
                 result = tool_file_write(call_params, task_id=self.task_id, root=self.root)
+            elif name == "agent_run":
+                result = tool_agent_run(call_params, task_id=self.task_id, root=self.root)
             else:
                 raise ToolError("unknown_tool", f"unknown tool: {name!r}")
         except ToolError as exc:

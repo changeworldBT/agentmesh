@@ -28,7 +28,7 @@
   面仅标准库+PyYAML+uvicorn/fastapi）；失败重试 1 次（本 ask 指定），两次失败 →
   PlanValidationError + 错误账本登记（error_type=plan_schema_violation），T10/T2 超时
   兜底归编排引擎。
-- 允许工具集以 executor.TOOL_ALLOWLIST（http_get/file_write）为双闸门中的 brief 白名单
+- 允许工具集以 executor.TOOL_ALLOWLIST（http_get/file_write/agent_run）为双闸门中的 brief 白名单
   一侧（§6.2 角色授权闸门归工具接入层后续交付物）；计划中出现未知工具按校验错误处理
   （从严——缺字段/越权工具拒绝派发，ARCH §4.2「缺字段拒绝派发」）。
 - depends_on 依赖环检测（Kahn 拓扑）为 MVP 增补的 T2 落库合法性检查（设计未明说，环会
@@ -66,11 +66,12 @@ _PLAN_SCHEMA_PROMPT = """你是任务规划器。把用户的自然语言目标�
               "batch_mode": false, "batch_total_items": null, "partial_ok": false}],
   "subtasks": [{"id": "g1-1", "group_id": "g1", "objective": "一句话可判定成败的目标",
                 "task_type": "子任务类型", "self_contained_context": "背景必要摘录（读者对主对话零了解）",
-                "acceptance_criteria": ["机器可核对判据"], "allowed_tools": ["http_get", "file_write"],
+                "acceptance_criteria": ["机器可核对判据"], "allowed_tools": ["http_get", "file_write", "agent_run"],
                 "risk_tier_hint": "irreversible|reversible_costly|reversible",
                 "budget_usd": 数字, "max_iterations": 1..15 的整数}]
 }
-约束：group id 与 subtask id 全局唯一；subtask.group_id 必须存在；depends_on 不得成环；
+约束：group id 与 subtask id 全局唯一；subtask.group_id 必须存在；depends_on 只能引用
+【其他】分组的 id，不得包含自己的 id（单个分组必须 "depends_on": []），不得成环；
 allowed_tools 只能取内核白名单内的工具名；批量并行拆分仅在项间无数据依赖且规模 ≥10 项时使用（sys-arch §4.4）。"""
 
 _PREVENTION_PROMPT_HEADER = "【错误账本强制检索命中（写入每个 brief 的 prevention_rules，执行时必须遵守）】"

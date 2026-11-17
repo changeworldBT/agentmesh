@@ -303,3 +303,86 @@ def test_executor_requires_planning_status_and_brief() -> None:
             raise AssertionError("executor must require planning + brief")
     finally:
         cleanup(database, directory)
+
+
+# ---- agent_run：herdr 治理通道 ----
+
+def test_agent_run_requires_task_and_missing_herdr_fails_cleanly(monkeypatch=None) -> None:
+    """task 为空 → ToolError；herdr 不在 PATH → herdr_unavailable（均登记账本语义，不崩）。"""
+    from app.engine.executor import ToolError, tool_agent_run
+    import os
+    try:
+        tool_agent_run({"task": ""}, task_id="task-x")
+    except ToolError as exc:
+        assert exc.error_type == "task_empty"
+    else:
+        raise AssertionError("empty task must raise task_empty")
+    saved = os.environ.get("AGENTMESH_HERDR_BIN")
+    os.environ["AGENTMESH_HERDR_BIN"] = "Z:/definitely/not/here/herdr.exe"
+    try:
+        # PATH 上没有、override 也不是文件 → HerdrUnavailableError
+        tool_agent_run({"task": "写个文件"}, task_id="task-x")
+    except ToolError as exc:
+        assert exc.error_type == "herdr_unavailable"
+    else:
+        raise AssertionError("missing herdr must raise herdr_unavailable")
+    finally:
+        if saved is None:
+            os.environ.pop("AGENTMESH_HERDR_BIN", None)
+        else:
+            os.environ["AGENTMESH_HERDR_BIN"] = saved
+
+
+def test_agent_run_dispatches_via_stub_herdr(monkeypatch=None) -> None:
+    """用假 herdr 脚本模拟 CLI：prompt --wait → read → get，验证派活/回读/状态解析全链。"""
+    import os
+    import stat
+    import sys
+    import tempfile
+    from app.engine.executor import tool_agent_run
+
+    tmpdir = Path(tempfile.mkdtemp(prefix="agentmesh_herdr_stub_"))
+    if os.name == "nt":
+        # 注意：CLI 实际调用是 `herdr agent prompt ...`（%1=agent %2=子命令），
+        # bat 的 %1 已被 "agent" 占掉，所以按 %2 分支。
+        script = tmpdir / "herdr.bat"
+        script.write_text(
+            "@echo off\r\n"
+            "if /I \"%2\"==\"prompt\" (echo {\"id\":\"x\",\"result\":{\"type\":\"agent_prompted\"}} & exit /b 0)\r\n"
+            "if /I \"%2\"==\"read\" (echo AGENT OUTPUT TAIL LINE & exit /b 0)\r\n"
+            "if /I \"%2\"==\"get\" (echo {\"result\":{\"agent\":{\"agent_status\":\"idle\"}}} & exit /b 0)\r\n"
+            "exit /b 1\r\n", encoding="ascii")
+    else:
+        script = tmpdir / "herdr"
+        script.write_text(
+            "#!/bin/sh\n"
+            "case \"$2\" in\n"
+            "  prompt) echo '{\"id\":\"x\",\"result\":{\"type\":\"agent_prompted\"}}'; exit 0;;\n"
+            "  read)   echo 'AGENT OUTPUT TAIL LINE'; exit 0;;\n"
+            "  get)    echo '{\"result\":{\"agent\":{\"agent_status\":\"idle\"}}}'; exit 0;;\n"
+            "esac\nexit 1\n", encoding="ascii")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    saved = os.environ.get("AGENTMESH_HERDR_BIN")
+    os.environ["AGENTMESH_HERDR_BIN"] = str(script)
+    try:
+        result = tool_agent_run({"task": "创建 hello.txt"}, task_id="task-x")
+        assert result["agent"]  # 默认 agentmesh-worker
+        assert result["status"] == "idle"
+        assert "AGENT OUTPUT TAIL LINE" in result["output_tail"]
+    finally:
+        if saved is None:
+            os.environ.pop("AGENTMESH_HERDR_BIN", None)
+        else:
+            os.environ["AGENTMESH_HERDR_BIN"] = saved
+
+
+def test_agent_run_in_allowlist_and_plan_contract() -> None:
+    """agent_run 必须在内核白名单与 STUB 计划模板里（治理通道对 planner 可见）。"""
+    from app.engine.executor import TOOL_ALLOWLIST, TOOL_SCHEMAS
+    assert "agent_run" in TOOL_ALLOWLIST
+    assert any(s["name"] == "agent_run" for s in TOOL_SCHEMAS)
+    plan = json.loads(StubClient().chat(
+        __import__("app.engine.llm", fromlist=["LLMRequest"]).LLMRequest(
+            messages=[{"role": "user", "content": "目标"}], kind="plan",
+            stub_payload={"goal": "做个东西", "task_type": "web_research"})).content or "{}")
+    assert "agent_run" in plan["subtasks"][0]["allowed_tools"]

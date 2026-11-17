@@ -224,8 +224,11 @@ def test_scheduler_fires_and_missed_compensation() -> None:
         trigger = triggers.create_trigger(database, trigger_type="cron", goal_template="分钟任务",
                                           schedule="* * * * *", timezone_name="UTC")
         now = datetime(2026, 11, 17, 10, 5, tzinfo=UTC)
-        # next_fire_at 回拨到 10 分钟前（> 120s 宽限）→ 补跑一次 + trigger_missed
-        scheduled = iso_shift(utc_now_iso(), -600)
+        # next_fire_at 回拨到 now 的 10 分钟前（> 120s 宽限）→ 补跑一次 + trigger_missed。
+        # 基准必须取测试传入的 now（iso_shift(now_iso, -600)），不能取真实墙钟：
+        # 旧写法 iso_shift(utc_now_iso(), -600) 与真实时钟耦合——真实时钟若晚于
+        # now+600s，scheduled 会落在 now 之后，tick 永不触发（真实缺陷，2026-11-17 10:35 实测命中）。
+        scheduled = iso_shift(now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z", -600)
         database.execute("UPDATE triggers SET next_fire_at = ? WHERE id = ?",
                          (scheduled, trigger["trigger_id"]))
         fired = scheduler.tick(now=now)
@@ -240,11 +243,22 @@ def test_scheduler_fires_and_missed_compensation() -> None:
         # 宽限内的迟到（<120s）→ 补跑但不登记 missed
         trigger2 = triggers.create_trigger(database, trigger_type="cron", goal_template="小迟到",
                                            schedule="* * * * *", timezone_name="UTC")
+        # 小迟到用真实墙钟自洽：scheduled=真实 now -30s（宽限内），tick(now=真实 now)
+        real_now_iso = utc_now_iso()
         database.execute("UPDATE triggers SET next_fire_at = ? WHERE id = ?",
-                         (iso_shift(utc_now_iso(), -30), trigger2["trigger_id"]))
+                         (iso_shift(real_now_iso, -30), trigger2["trigger_id"]))
         fired3 = scheduler.tick(now=datetime.now(UTC))
-        assert len(fired3) == 1 and fired3[0]["missed"] is False
-        assert len(database.query("SELECT * FROM events WHERE event_type = 'trigger_missed'")) == 1
+        # fired3 只含 trigger2 这一条（trigger1 的 next_fire_at 已推进到 10:06，
+        # 真实墙钟（>10:06 时）会再次命中 trigger1——那是预期行为，不属于本断言范围）
+        mine = [f for f in fired3 if f["trigger_id"] == trigger2["trigger_id"]]
+        assert len(mine) == 1 and mine[0]["missed"] is False
+        # trigger_missed 事件仍只有 trigger1 那一条：真实墙钟 > 10:06 时 trigger1 会被
+        # tick 再次补跑（missed=True 又各记一条）——事件总数 ≥1，但小迟到这条绝不登记 missed
+        real_now = datetime.now(UTC)
+        trigger1_remissed = real_now > now + timedelta(seconds=120)
+        missed_count = len(database.query("SELECT * FROM events WHERE event_type = 'trigger_missed'"))
+        assert missed_count >= 1 and (
+            missed_count == 1 or (trigger1_remissed and missed_count == 2))
     finally:
         cleanup(database, directory)
 
