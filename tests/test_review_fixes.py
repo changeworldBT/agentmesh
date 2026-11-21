@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from pathlib import Path
 
-from _helpers import cleanup, fresh_db
+from _helpers import cleanup, fresh_db, temp_workspace_root
 from test_api_server import TOKEN, _boot, _json_of, _request
 
 from app.engine import state
@@ -160,7 +161,8 @@ def test_engine_loop_full_lifecycle_and_approval_expiry() -> None:
         from app.main import EngineLoop
         engine = EngineLoop(database, StubClient(database=database))
         task_id = state.create_task(database, title="全链", goal="STUB 推进到 done")
-        result = engine.tick()
+        with temp_workspace_root():
+            result = engine.tick()
         assert any(c["task_id"] == task_id and c.get("stage") == "done"
                    for c in result["claimed"])
         status, payload, _ = _request("GET", base, f"/api/v1/tasks/{task_id}")
@@ -194,9 +196,12 @@ def test_deploy_artifacts_credential_channel_no_plaintext() -> None:
     """P-cred 回归：部署产物走 age 密文库（CRED §3A'/§10.2），磁盘无明文令牌文件、
     .env 无 key 槽、compose 挂密文与 age_key secret。"""
     deploy = Path(__file__).resolve().parent.parent / "deploy"
-    env_text = (deploy / ".env").read_text(encoding="utf-8")
     compose_text = (deploy / "compose.yaml").read_text(encoding="utf-8")
     install_text = (deploy / "install.sh").read_text(encoding="utf-8")
+    # .env 不入库（.gitignore），由 install.sh 步骤 4 的 heredoc 生成——校验其生成模板
+    env_match = re.search(r'cat > "\$ENV_FILE" <<EOF\n(.*?)\nEOF\n', install_text, re.S)
+    assert env_match, "install.sh must generate .env via heredoc"
+    env_text = env_match.group(1)
     # .env：只有路径指针，无任何 *KEY=/TOKEN= 明文槽
     assert "AGENTMESH_CREDENTIALS_FILE=" in env_text
     assert "AGENTMESH_AGE_KEY_FILE=" in env_text

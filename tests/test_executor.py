@@ -14,6 +14,7 @@ http_get、tool_calls 审计、结果事件落库、on_failure register_and_stop
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 from _helpers import FakeLLM, cleanup, fresh_db, local_http_server, valid_plan
@@ -52,7 +53,7 @@ def test_path_guard_rejects_escapes() -> None:
                 raise AssertionError(f"must reject escape: {bad}")
         # 越界：绝对路径在工作区外
         try:
-            resolve_in_workspace(root, "task-1", "C:/Windows/temp/evil.txt")
+            resolve_in_workspace(root, "task-1", str(Path(tempfile.gettempdir()).resolve() / "evil.txt"))
         except PathEscapeError:
             pass
         else:

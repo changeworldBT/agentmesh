@@ -5,7 +5,7 @@ AgentMesh 是一个自研的任务编排内核：用户只提交自然语言目�
 - 内核：Python 3.12 stdlib（HTTP 服务 `http.server` + SQLite WAL 单写连接），第三方依赖仅 PyYAML
 - 部署：Docker Compose 单机（4 核 8G 实测通过）；镜像约 206MB
 - 安全：API 令牌与 LLM 网关 key 存于 age 加密的 `credentials.enc`，按角色（planner/worker/reviewer/…）与凭证组分权注入，全程审计；仓库与 `.env` 不含任何明文密钥
-- 测试：`python tests/run_all.py`（98 例；无 `age` 二进制的机器上 1 例 SKIP）
+- 测试：`python tests/run_all.py`（102 例；无 `age` 二进制的机器上 1 例 SKIP；CI 见 `.github/workflows/tests.yml`）
 
 ## 快速部署（Debian/Ubuntu + Docker）
 

@@ -1,3 +1,0 @@
-roles:
-  worker: {tools: [memory-read], credential_groups: [accounts]}
-  planner: {tools: [], credential_groups: []}

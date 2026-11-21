@@ -16,7 +16,7 @@ import os
 import time
 from pathlib import Path
 
-from _helpers import TestSkipped, cleanup, fresh_db
+from _helpers import TestSkipped, cleanup, fresh_db, temp_workspace_root
 from test_api_server import TOKEN, _boot, _json_of, _request
 
 from app.engine import executor, state, triggers
@@ -332,7 +332,8 @@ def test_engine_loop_passes_credential_manager_to_executor() -> None:
                             credential_manager=manager)
         assert engine.credential_manager is manager
         task_id = state.create_task(database, title="透传", goal="STUB 全链")
-        engine.tick()
+        with temp_workspace_root():
+            engine.tick()
         assert database.query_one("SELECT status FROM tasks WHERE id = ?",
                                   (task_id,))["status"] == "done"
     finally:
