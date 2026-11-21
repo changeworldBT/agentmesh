@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import threading
 from contextlib import contextmanager
@@ -36,6 +37,22 @@ def fresh_db(tmp: Path | None = None, *, name: str = "agentmesh.db",
 def cleanup(database: Database, directory: Path) -> None:
     database.close()
     rmtree(directory, ignore_errors=True)
+
+
+@contextmanager
+def temp_workspace_root() -> Iterator[Path]:
+    """临时设置 AGENTMESH_WORKSPACE_ROOT，使引擎全链测试不依赖可写的 /data（退出时还原）。"""
+    root = Path(tempfile.mkdtemp(prefix="agentmesh-ws-"))
+    previous = os.environ.get("AGENTMESH_WORKSPACE_ROOT")
+    os.environ["AGENTMESH_WORKSPACE_ROOT"] = str(root)
+    try:
+        yield root
+    finally:
+        if previous is None:
+            os.environ.pop("AGENTMESH_WORKSPACE_ROOT", None)
+        else:
+            os.environ["AGENTMESH_WORKSPACE_ROOT"] = previous
+        rmtree(root, ignore_errors=True)
 
 
 class FakeLLM:
